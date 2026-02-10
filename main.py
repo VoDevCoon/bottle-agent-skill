@@ -1,39 +1,64 @@
 import io
-import os
+import gc
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import Response
 from rembg import remove, new_session
 from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 
-# Create a session with the 'u2netp' (lightweight) model
-# This prevents "Out of Memory" errors on free servers
+# 1. Pre-load the "Lite" Model
+# 'u2netp' is the lightweight mobile version (4MB vs 176MB)
 model_session = new_session("u2netp")
 
 app = FastAPI(title="Wine Bottle Processor API")
 
 @app.get("/")
 def home():
-    """Health Check Endpoint for Render"""
     return {"status": "healthy", "message": "Wine Bottle AI is running!"}
 
-def process_image(input_bytes: bytes) -> bytes:
-    # --- Configuration ---
+# Note: We removed 'async' from this function definition.
+# This allows FastAPI to run the CPU-heavy work in a separate thread,
+# preventing the server from freezing (and getting killed) during processing.
+@app.post("/process-bottle/")
+def process_bottle_endpoint(file: UploadFile = File(...)):
+    
+    # Read file
+    input_bytes = file.file.read()
+    
+    # --- STEP 1: SAFETY RESIZE (The Memory Fix) ---
+    # Open the image
+    raw_img = Image.open(io.BytesIO(input_bytes)).convert("RGBA")
+    
+    # If image is larger than 1000px, shrink it BEFORE AI processing.
+    # This prevents the 512MB RAM crash.
+    MAX_HEIGHT = 1000
+    if raw_img.height > MAX_HEIGHT:
+        ratio = MAX_HEIGHT / raw_img.height
+        new_w = int(raw_img.width * ratio)
+        # resize triggers the 'resample' which reduces pixel count
+        raw_img = raw_img.resize((new_w, MAX_HEIGHT), Image.Resampling.LANCZOS)
+    
+    # --- STEP 2: AI PROCESSING ---
+    # Now we pass the smaller image to the AI
+    subject_img = remove(raw_img, session=model_session)
+    
+    # Free up memory immediately
+    del raw_img
+    gc.collect()
+    
+    # --- STEP 3: COMPOSITING (Shadows & Polish) ---
+    # Configuration
     TARGET_WIDTH = 555
     TARGET_HEIGHT = 555
     SHADOW_OPACITY = 0.85
     SHADOW_BLUR_RADIUS = 15
     SHARPEN_FACTOR = 1.5
-    
-    # 1. AI Background Removal (Using the lightweight session)
-    subject_bytes = remove(input_bytes, session=model_session)
-    subject_img = Image.open(io.BytesIO(subject_bytes)).convert("RGBA")
-    
-    # 2. Trim Empty Space
+
+    # Trim Empty Space
     bbox = subject_img.getbbox()
     if bbox:
         subject_img = subject_img.crop(bbox)
         
-    # 3. Smart Resize
+    # Smart Resize to Target Box
     max_w = TARGET_WIDTH - 80
     max_h = TARGET_HEIGHT - 120 
     
@@ -46,14 +71,14 @@ def process_image(input_bytes: bytes) -> bytes:
     
     subject_img = subject_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
     
-    # 4. Sharpening
+    # Sharpening
     enhancer = ImageEnhance.Sharpness(subject_img)
     subject_img = enhancer.enhance(SHARPEN_FACTOR)
     
-    # 5. Create Final Canvas
+    # Create Final Canvas
     final_canvas = Image.new("RGBA", (TARGET_WIDTH, TARGET_HEIGHT), (0, 0, 0, 0))
     
-    # 6. Create the "Floor" Shadow
+    # Create Shadow
     shadow_w = int(new_w * 1.2) 
     shadow_h = int(new_w * 0.25)
     
@@ -73,18 +98,14 @@ def process_image(input_bytes: bytes) -> bytes:
     a = a.point(lambda p: p * SHADOW_OPACITY)
     shadow_layer = Image.merge("RGBA", (r, g, b, a))
     
-    # 7. Compose
+    # Final Paste
     final_canvas.paste(shadow_layer, (0, 0), shadow_layer)
     bottle_x = (TARGET_WIDTH - new_w) // 2
     bottle_y = floor_y - new_h + 5
     final_canvas.paste(subject_img, (bottle_x, bottle_y), subject_img)
 
+    # Output
     output_buffer = io.BytesIO()
     final_canvas.save(output_buffer, format="PNG")
-    return output_buffer.getvalue()
-
-@app.post("/process-bottle/")
-async def process_bottle_endpoint(file: UploadFile = File(...)):
-    input_bytes = await file.read()
-    output_bytes = process_image(input_bytes)
-    return Response(content=output_bytes, media_type="image/png")
+    
+    return Response(content=output_buffer.getvalue(), media_type="image/png")
