@@ -1,21 +1,15 @@
+from memory_profiler import profile
 import io
 import gc
 import cv2
 import numpy as np
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import Response
 from rembg import remove, new_session
 from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 
-# 1. Pre-load the "Lite" Model
-model_session = new_session("u2netp")
+# Load model
+session = new_session("u2netp")
 
-app = FastAPI(title="Wine Bottle Processor API")
-
-@app.get("/")
-def home():
-    return {"status": "healthy", "message": "High-Res WebP Processor is Ready"}
-
+# --- HELPER FUNCTIONS ---
 def aggressive_crop(pil_img, threshold=20):
     try:
         img_np = np.array(pil_img)
@@ -41,86 +35,86 @@ def straighten_bottle(pil_img):
         return pil_img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True)
     except: return pil_img
 
-@app.post("/process-bottle/")
-def process_bottle_endpoint(file: UploadFile = File(...)):
+# --- THE TEST FUNCTION ---
+@profile
+def run_benchmark():
+    print("--- STARTING HIGH-RES (1200px) MEMORY TEST ---")
     
-    input_bytes = file.file.read()
+    # REPLACE THIS WITH YOUR IMAGE NAME
+    filename = "test111.png" 
+    
+    try:
+        with open(filename, "rb") as f:
+            input_bytes = f.read()
+    except FileNotFoundError:
+        print(f"❌ Error: Could not find '{filename}'. Please make sure an image file is in this folder.")
+        return
+
+    # 1. HIGH-RES INPUT RESIZE (1600px)
+    print("1. Opening & Resizing (Target: 1600px)...")
     raw_img = Image.open(io.BytesIO(input_bytes)).convert("RGBA")
-    
-    # --- STEP 1: RESIZE INPUT ---
-    # Increased to 1600px so we have enough detail for the 1200px output
     MAX_INPUT_HEIGHT = 1600 
     if raw_img.height > MAX_INPUT_HEIGHT:
         ratio = MAX_INPUT_HEIGHT / raw_img.height
         new_w = int(raw_img.width * ratio)
         raw_img = raw_img.resize((new_w, MAX_INPUT_HEIGHT), Image.Resampling.LANCZOS)
     
-    # --- STEP 2: AI PROCESSING ---
-    subject_img = remove(raw_img, session=model_session)
+    # 2. AI PROCESSING
+    print("2. Running AI (Heavier now due to size)...")
+    subject_img = remove(raw_img, session=session)
+    del raw_img
+    gc.collect() 
     
-    # --- STEP 3: POLISH ---
+    # 3. POLISH
+    print("3. Straightening & Cropping...")
     subject_img = straighten_bottle(subject_img)
     subject_img = aggressive_crop(subject_img)
     
-    # --- STEP 4: COMPOSITING (1200px x 1200px) ---
+    # 4. COMPOSITING (1200x1200px)
+    print("4. Creating 1200px Canvas & Shadows...")
     TARGET_WIDTH = 1200
     TARGET_HEIGHT = 1200
     SHADOW_OPACITY = 0.85
-    SHADOW_BLUR_RADIUS = 30  # Increased for higher res
-    SHARPEN_FACTOR = 1.3     # Slightly less sharpening needed at high res
+    SHADOW_BLUR_RADIUS = 30  # Increased for Hi-Res
+    SHARPEN_FACTOR = 1.3
 
-    # Padding calculation (approx 10% padding)
     max_w = TARGET_WIDTH - 200
     max_h = TARGET_HEIGHT - 250 
-    
     width_ratio = max_w / subject_img.width
     height_ratio = max_h / subject_img.height
     scale_factor = min(width_ratio, height_ratio)
-    
     new_w = int(subject_img.width * scale_factor)
     new_h = int(subject_img.height * scale_factor)
-    
     subject_img = subject_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-    
-    # Sharpening
     enhancer = ImageEnhance.Sharpness(subject_img)
     subject_img = enhancer.enhance(SHARPEN_FACTOR)
     
-    # Create Final Canvas
     final_canvas = Image.new("RGBA", (TARGET_WIDTH, TARGET_HEIGHT), (0, 0, 0, 0))
-    
-    # Shadow Logic
     shadow_w = int(new_w * 1.2) 
     shadow_h = int(new_w * 0.25)
     shadow_layer = Image.new("RGBA", (TARGET_WIDTH, TARGET_HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(shadow_layer)
-    
     shadow_x1 = (TARGET_WIDTH - shadow_w) // 2
-    floor_y = TARGET_HEIGHT - 100 # Moved floor down for 1200px
+    floor_y = TARGET_HEIGHT - 100 
     shadow_y1 = floor_y - (shadow_h // 2)
     shadow_x2 = shadow_x1 + shadow_w
     shadow_y2 = shadow_y1 + shadow_h
-    
     draw.ellipse((shadow_x1, shadow_y1, shadow_x2, shadow_y2), fill=(0, 0, 0, 255))
     shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=SHADOW_BLUR_RADIUS))
-    
     r, g, b, a = shadow_layer.split()
     a = a.point(lambda p: p * SHADOW_OPACITY)
     shadow_layer = Image.merge("RGBA", (r, g, b, a))
-    
-    # Paste Layers
     final_canvas.paste(shadow_layer, (0, 0), shadow_layer)
     bottle_x = (TARGET_WIDTH - new_w) // 2
-    bottle_y = floor_y - new_h + 10 # Slight offset adjustment
+    bottle_y = floor_y - new_h + 10
     final_canvas.paste(subject_img, (bottle_x, bottle_y), subject_img)
 
-    # --- STEP 5: SAVE AS WEBP ---
+    # 5. SAVING AS WEBP
+    print("5. Saving as WebP...")
     output_buffer = io.BytesIO()
-    # quality=95 gives near-lossless look but much smaller size
     final_canvas.save(output_buffer, format="WEBP", quality=95, method=6)
     
-    # Cleanup
-    del raw_img, subject_img, final_canvas, shadow_layer
-    gc.collect()
-    
-    return Response(content=output_buffer.getvalue(), media_type="image/webp")
+    print(f"--- DONE! Output size: {len(output_buffer.getvalue())/1024:.1f} KB ---")
+
+if __name__ == "__main__":
+    run_benchmark()

@@ -2,70 +2,78 @@ import streamlit as st
 import requests
 from PIL import Image
 import io
+import zipfile
 
 # --- CONFIGURATION ---
-# PASTE YOUR RENDER URL HERE (No trailing slash, no /docs)
-API_URL = "https://bottle-processor.onrender.com" 
+API_URL = "http://127.0.0.1:8000"
 
-st.set_page_config(page_title="Wine Bottle Studio", page_icon="🍷")
+st.set_page_config(page_title="High-Res Bottle Factory", page_icon="🍷", layout="wide")
 
-# --- UI HEADER ---
-st.title("🍷 Wine Bottle Studio")
-st.markdown("""
-Upload a raw photo of a wine bottle. 
-This tool will **remove the background**, **fix the lighting**, 
-and add a **perfect ground shadow**.
-""")
+st.title("🍷 High-Res (1200px) WebP Processor")
+st.markdown("Upload images to convert them into **1200x1200px WebP** files with transparent backgrounds.")
 
-# --- FILE UPLOADER ---
-uploaded_file = st.file_uploader("Choose a bottle photo...", type=["jpg", "jpeg", "png", "webp"])
+# File Uploader
+uploaded_files = st.file_uploader(
+    "Drag & Drop your bottle photos here", 
+    type=['png', 'jpg', 'jpeg', 'webp'], 
+    accept_multiple_files=True
+)
 
-if uploaded_file is not None:
-    # 1. Show the original image
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Original")
-        st.image(uploaded_file, use_container_width=True)
+if uploaded_files:
+    if "zip_buffer" not in st.session_state:
+        st.session_state.zip_buffer = None
 
-    # 2. Process Button
-    with col2:
-        st.subheader("Professional Result")
-        process_btn = st.button("✨ Process Bottle", type="primary")
-
-        if process_btn:
-            with st.spinner("Processing... (This might take 30s if the server is waking up)"):
+    if st.button(f"Start Processing ({len(uploaded_files)} Images)"):
+        
+        # In-memory ZIP
+        zip_buffer = io.BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            st.write("---")
+            st.subheader("Results Preview")
+            cols = st.columns(4) 
+            
+            for i, uploaded_file in enumerate(uploaded_files):
+                status_text.text(f"Processing {i+1}/{len(uploaded_files)}: {uploaded_file.name}...")
+                
+                uploaded_file.seek(0)
+                files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
+                
                 try:
-                    # Prepare the file for the API
-                    files = {"file": uploaded_file.getvalue()}
-                    
-                    # Call your Render API
                     response = requests.post(f"{API_URL}/process-bottle/", files=files)
                     
                     if response.status_code == 200:
-                        # Success!
-                        result_image = Image.open(io.BytesIO(response.content))
-                        st.image(result_image, use_container_width=True)
+                        image_data = response.content
+                        processed_image = Image.open(io.BytesIO(image_data))
                         
-                        # Download Button
-                        st.download_button(
-                            label="📥 Download Transparent PNG",
-                            data=response.content,
-                            file_name="processed_bottle.png",
-                            mime="image/png"
-                        )
+                        # CHANGE EXTENSION TO .webp
+                        base_name = uploaded_file.name.rsplit('.', 1)[0]
+                        new_filename = f"{base_name}.webp"
+                        
+                        # Add to ZIP
+                        zip_file.writestr(new_filename, image_data)
+                        
+                        with cols[i % 4]:
+                            st.image(processed_image, caption=f"✅ {new_filename}", use_container_width=True)
                     else:
-                        st.error(f"Error {response.status_code}: Something went wrong.")
-                        st.write(response.text)
+                        st.error(f"Failed: {uploaded_file.name}")
                         
                 except Exception as e:
-                    st.error(f"Connection Failed: {e}")
-                    st.info("Tip: Make sure your Render API is running and the URL is correct.")
+                    st.error(f"Error on {uploaded_file.name}: {e}")
+                
+                progress_bar.progress((i + 1) / len(uploaded_files))
+        
+        status_text.success("🎉 Done! Ready to download.")
+        st.session_state.zip_buffer = zip_buffer.getvalue()
 
-# --- SIDEBAR INSTRUCTIONS ---
-with st.sidebar:
-    st.header("Instructions")
-    st.write("1. Take a photo of your bottle.")
-    st.write("2. Upload it here.")
-    st.write("3. Wait for the magic.")
-    st.divider()
-    st.caption("Powered by AI & Python")
+    if st.session_state.zip_buffer:
+        st.download_button(
+            label="⬇️ Download All (ZIP)",
+            data=st.session_state.zip_buffer,
+            file_name="processed_bottles_webp.zip",
+            mime="application/zip",
+            type="primary"
+        )
