@@ -1,9 +1,8 @@
 fastapi
 uvicorn
 python-multipart
-rembg[cpu]
+requests
 pillow
 numpy
 opencv-python-headless
-requests
-streamlit
+rembg[cpu]
