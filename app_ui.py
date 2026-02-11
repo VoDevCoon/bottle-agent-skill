@@ -5,16 +5,16 @@ import io
 import zipfile
 
 # --- CONFIGURATION ---
-API_URL = "http://127.0.0.1:8000"
+API_URL = "https://tc6yp74rr4.ap-southeast-2.awsapprunner.com"
 
-st.set_page_config(page_title="High-Res Bottle Factory", page_icon="🍷", layout="wide")
+st.set_page_config(page_title="High-Res Image Factory", layout="wide")
 
-st.title("🍷 High-Res (1200px) WebP Processor")
+st.title("High-Res (1200px) WebP Processor")
 st.markdown("Upload images to convert them into **1200x1200px WebP** files with transparent backgrounds.")
 
 # File Uploader
 uploaded_files = st.file_uploader(
-    "Drag & Drop your bottle photos here", 
+    "Drag & Drop your photos here", 
     type=['png', 'jpg', 'jpeg', 'webp'], 
     accept_multiple_files=True
 )
