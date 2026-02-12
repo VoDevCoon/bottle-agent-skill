@@ -5,7 +5,7 @@ import io
 import zipfile
 
 # --- CONFIGURATION ---
-API_URL = "https://tc6yp74rr4.ap-southeast-2.awsapprunner.com"
+API_URL = "https://zxqyxpg2tv.ap-southeast-2.awsapprunner.com"
 
 st.set_page_config(page_title="High-Res Image Factory", layout="wide")
 
