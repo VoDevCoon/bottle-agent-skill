@@ -1,18 +1,24 @@
 import sys
 import subprocess
+import os
 
-# --- SELF-HEALING BLOCK ---
-# If AWS "forgot" to install cv2, we install it right here, right now.
+# --- BOOTSTRAP: AUTO-INSTALL DEPENDENCIES ---
+# This block ensures all libraries are installed before the app starts.
 try:
+    import fastapi
     import cv2
-except ImportError:
-    print("⚠️ CV2 module missing! Force installing now...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "opencv-python-headless"])
-    import cv2
-# ---------------------------
+    import rembg
+except ImportError as e:
+    print(f"⚠️ Missing dependency ({e.name}). Installing all requirements now...")
+    # Force install everything in requirements.txt
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+    print("✅ Installation complete. Starting app...")
 
+# --- NORMAL IMPORTS ---
+# Now that we know they are installed, we can import them safely.
 import io
 import gc
+import cv2
 import numpy as np
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import Response
@@ -26,64 +32,92 @@ app = FastAPI(title="Wine Bottle Processor API")
 
 @app.get("/")
 def home():
-    return {"status": "healthy", "message": "High-Res WebP Processor is Ready"}
+    return {"status": "healthy", "message": "Wine Bottle AI is running!"}
 
 def aggressive_crop(pil_img, threshold=20):
+    """
+    Crops the image based on visible pixels only.
+    """
     try:
         img_np = np.array(pil_img)
         alpha = img_np[:, :, 3]
         rows = np.any(alpha > threshold, axis=1)
         cols = np.any(alpha > threshold, axis=0)
-        if not np.any(rows) or not np.any(cols): return pil_img
+        
+        if not np.any(rows) or not np.any(cols):
+            return pil_img
+            
         ymin, ymax = np.where(rows)[0][[0, -1]]
         xmin, xmax = np.where(cols)[0][[0, -1]]
+        
         return pil_img.crop((xmin, ymin, xmax + 1, ymax + 1))
-    except: return pil_img
+        
+    except Exception as e:
+        print(f"Aggressive crop failed: {e}")
+        return pil_img
 
 def straighten_bottle(pil_img):
+    """
+    Detects tilt and rotates the bottle to be vertical.
+    """
     try:
         img_np = np.array(pil_img)
         alpha = img_np[:, :, 3]
         contours, _ = cv2.findContours(alpha, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours: return pil_img 
+        
+        if not contours:
+            return pil_img 
+            
         largest_contour = max(contours, key=cv2.contourArea)
         center, (w, h), angle = cv2.minAreaRect(largest_contour)
-        if w > h: angle = angle + 90
-        if abs(angle) > 45: angle = 0
+        
+        if w > h:
+            angle = angle + 90
+            
+        if abs(angle) > 45:
+            angle = 0
+            
         return pil_img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True)
-    except: return pil_img
+        
+    except Exception as e:
+        print(f"Straightening failed: {e}")
+        return pil_img
 
 @app.post("/process-bottle/")
 def process_bottle_endpoint(file: UploadFile = File(...)):
     
+    # Read file
     input_bytes = file.file.read()
+    
+    # --- STEP 1: SAFETY RESIZE ---
     raw_img = Image.open(io.BytesIO(input_bytes)).convert("RGBA")
     
-    # --- STEP 1: RESIZE INPUT ---
-    # Increased to 1600px so we have enough detail for the 1200px output
-    MAX_INPUT_HEIGHT = 1600 
-    if raw_img.height > MAX_INPUT_HEIGHT:
-        ratio = MAX_INPUT_HEIGHT / raw_img.height
+    # Resize heavily to prevent memory crashes
+    MAX_HEIGHT = 800 
+    if raw_img.height > MAX_HEIGHT:
+        ratio = MAX_HEIGHT / raw_img.height
         new_w = int(raw_img.width * ratio)
-        raw_img = raw_img.resize((new_w, MAX_INPUT_HEIGHT), Image.Resampling.LANCZOS)
+        raw_img = raw_img.resize((new_w, MAX_HEIGHT), Image.Resampling.LANCZOS)
     
-    # --- STEP 2: AI PROCESSING ---
+    # --- STEP 2: AI BACKGROUND REMOVAL ---
     subject_img = remove(raw_img, session=model_session)
+    del raw_img
+    gc.collect()
     
-    # --- STEP 3: POLISH ---
+    # --- STEP 3: STRAIGHTEN & AGGRESSIVE CROP ---
     subject_img = straighten_bottle(subject_img)
     subject_img = aggressive_crop(subject_img)
     
-    # --- STEP 4: COMPOSITING (1200px x 1200px) ---
-    TARGET_WIDTH = 1200
-    TARGET_HEIGHT = 1200
+    # --- STEP 4: COMPOSITING ---
+    TARGET_WIDTH = 555
+    TARGET_HEIGHT = 555
     SHADOW_OPACITY = 0.85
-    SHADOW_BLUR_RADIUS = 30  # Increased for higher res
-    SHARPEN_FACTOR = 1.3     # Slightly less sharpening needed at high res
+    SHADOW_BLUR_RADIUS = 15
+    SHARPEN_FACTOR = 1.5
 
-    # Padding calculation (approx 10% padding)
-    max_w = TARGET_WIDTH - 200
-    max_h = TARGET_HEIGHT - 250 
+    # Smart Resize to Target Box
+    max_w = TARGET_WIDTH - 80
+    max_h = TARGET_HEIGHT - 120 
     
     width_ratio = max_w / subject_img.width
     height_ratio = max_h / subject_img.height
@@ -101,14 +135,15 @@ def process_bottle_endpoint(file: UploadFile = File(...)):
     # Create Final Canvas
     final_canvas = Image.new("RGBA", (TARGET_WIDTH, TARGET_HEIGHT), (0, 0, 0, 0))
     
-    # Shadow Logic
+    # Create Shadow
     shadow_w = int(new_w * 1.2) 
     shadow_h = int(new_w * 0.25)
+    
     shadow_layer = Image.new("RGBA", (TARGET_WIDTH, TARGET_HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(shadow_layer)
     
     shadow_x1 = (TARGET_WIDTH - shadow_w) // 2
-    floor_y = TARGET_HEIGHT - 100 # Moved floor down for 1200px
+    floor_y = TARGET_HEIGHT - 50 
     shadow_y1 = floor_y - (shadow_h // 2)
     shadow_x2 = shadow_x1 + shadow_w
     shadow_y2 = shadow_y1 + shadow_h
@@ -120,24 +155,19 @@ def process_bottle_endpoint(file: UploadFile = File(...)):
     a = a.point(lambda p: p * SHADOW_OPACITY)
     shadow_layer = Image.merge("RGBA", (r, g, b, a))
     
-    # Paste Layers
+    # Final Paste (Centered)
     final_canvas.paste(shadow_layer, (0, 0), shadow_layer)
     bottle_x = (TARGET_WIDTH - new_w) // 2
-    bottle_y = floor_y - new_h + 10 # Slight offset adjustment
+    bottle_y = floor_y - new_h + 5
     final_canvas.paste(subject_img, (bottle_x, bottle_y), subject_img)
 
-    # --- STEP 5: SAVE AS WEBP ---
+    # Output
     output_buffer = io.BytesIO()
-    # quality=95 gives near-lossless look but much smaller size
-    final_canvas.save(output_buffer, format="WEBP", quality=95, method=6)
+    final_canvas.save(output_buffer, format="PNG")
     
-    # Cleanup
-    del raw_img, subject_img, final_canvas, shadow_layer
-    gc.collect()
-    
-    return Response(content=output_buffer.getvalue(), media_type="image/webp")
+    return Response(content=output_buffer.getvalue(), media_type="image/png")
 
- # CORRECT (Indented)
+# --- SELF-RUNNER BLOCK ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
