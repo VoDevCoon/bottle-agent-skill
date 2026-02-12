@@ -125,7 +125,7 @@ def process_bottle_endpoint(file: UploadFile = File(...)):
     
     return Response(content=output_buffer.getvalue(), media_type="image/webp")
 
-    if __name__ == "__main__":
+ # CORRECT (Indented)
+if __name__ == "__main__":
     import uvicorn
-    # This runs the server directly when you type "python main.py"
     uvicorn.run(app, host="0.0.0.0", port=8080)
