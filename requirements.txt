@@ -5,4 +5,4 @@ requests
 pillow
 numpy
 rembg[cpu]
-# We will handle opencv manually in the build command
+opencv-python-headless
