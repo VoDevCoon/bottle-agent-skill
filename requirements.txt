@@ -1,9 +1,8 @@
-# Force Rebuild 001
+opencv-python-headless==4.8.0.74
+rembg[cpu]
 fastapi
 uvicorn
 python-multipart
 requests
 pillow
 numpy
-opencv-python-headless
-rembg[cpu]
