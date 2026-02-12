@@ -1,6 +1,18 @@
+import sys
+import subprocess
+
+# --- SELF-HEALING BLOCK ---
+# If AWS "forgot" to install cv2, we install it right here, right now.
+try:
+    import cv2
+except ImportError:
+    print("⚠️ CV2 module missing! Force installing now...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "opencv-python-headless"])
+    import cv2
+# ---------------------------
+
 import io
 import gc
-import cv2
 import numpy as np
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import Response
