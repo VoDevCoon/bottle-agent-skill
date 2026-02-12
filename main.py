@@ -1,21 +1,3 @@
-import sys
-import subprocess
-import os
-
-# --- BOOTSTRAP: AUTO-INSTALL DEPENDENCIES ---
-# This block ensures all libraries are installed before the app starts.
-try:
-    import fastapi
-    import cv2
-    import rembg
-except ImportError as e:
-    print(f"⚠️ Missing dependency ({e.name}). Installing all requirements now...")
-    # Force install everything in requirements.txt
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
-    print("✅ Installation complete. Starting app...")
-
-# --- NORMAL IMPORTS ---
-# Now that we know they are installed, we can import them safely.
 import io
 import gc
 import cv2
